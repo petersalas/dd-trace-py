@@ -28,8 +28,9 @@ log = get_logger(__name__)
 
 
 class _TracedIterable(wrapt.ObjectProxy):
-    def __init__(self, wrapped, span, parent_span):
-        super(_TracedIterable, self).__init__(wrapped)
+    def __init__(self, wrapped_iterable, span, parent_span):
+        super(_TracedIterable, self).__init__(wrapped_iterable)
+        self._wrapped_iter = iter(wrapped_iterable)
         self._self_span = span
         self._self_parent_span = parent_span
         self._self_span_finished = False
@@ -39,7 +40,7 @@ class _TracedIterable(wrapt.ObjectProxy):
 
     def __next__(self):
         try:
-            return next(self.__wrapped__)
+            return next(self._wrapped_iter)
         except StopIteration:
             self._finish_spans()
             raise
@@ -150,7 +151,7 @@ def _on_request_prepare(ctx, start_response):
     ctx.set_item("intercept_start_response", intercept_start_response)
 
 
-def _on_app_success(ctx, closing_iterator):
+def _on_app_success(ctx, closing_iterable):
     app_span = ctx.get_item("app_span")
     middleware = ctx.get_item("middleware")
     modifier = (
@@ -158,7 +159,7 @@ def _on_app_success(ctx, closing_iterator):
         if hasattr(middleware, "_application_call_modifier")
         else middleware._application_span_modifier
     )
-    modifier(app_span, ctx.get_item("environ"), closing_iterator)
+    modifier(app_span, ctx.get_item("environ"), closing_iterable)
     app_span.finish()
 
 
@@ -171,7 +172,7 @@ def _on_app_exception(ctx):
     req_span.finish()
 
 
-def _on_request_complete(ctx, closing_iterator):
+def _on_request_complete(ctx, closing_iterable):
     middleware = ctx.get_item("middleware")
     req_span = ctx.get_item("req_span")
     # start flask.response span. This span will be finished after iter(result) is closed.
@@ -191,9 +192,9 @@ def _on_request_complete(ctx, closing_iterator):
         if hasattr(middleware, "_response_call_modifier")
         else middleware._response_span_modifier
     )
-    modifier(resp_span, closing_iterator)
+    modifier(resp_span, closing_iterable)
 
-    return _TracedIterable(iter(closing_iterator), resp_span, req_span)
+    return _TracedIterable(closing_iterable, resp_span, req_span)
 
 
 def _on_response_context_started(ctx):
