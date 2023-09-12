@@ -21,16 +21,15 @@ from ddtrace.internal.constants import HTTP_REQUEST_BLOCKED
 from ddtrace.internal.constants import RESPONSE_HEADERS
 from ddtrace.internal.logger import get_logger
 from ddtrace.internal.utils import http as http_utils
-from ddtrace.vendor import wrapt
 
 
 log = get_logger(__name__)
 
 
-class _TracedIterable(wrapt.ObjectProxy):
-    def __init__(self, wrapped_iterable, span, parent_span):
-        super(_TracedIterable, self).__init__(wrapped_iterable)
-        self._wrapped_iter = iter(wrapped_iterable)
+class _TracedIterable:
+    def __init__(self, iterable, span, parent_span):
+        self._iterable = iterable
+        self._iterator = iter(iterable)
         self._self_span = span
         self._self_parent_span = parent_span
         self._self_span_finished = False
@@ -40,7 +39,7 @@ class _TracedIterable(wrapt.ObjectProxy):
 
     def __next__(self):
         try:
-            return next(self._wrapped_iter)
+            return next(self._iterator)
         except StopIteration:
             self._finish_spans()
             raise
@@ -53,8 +52,8 @@ class _TracedIterable(wrapt.ObjectProxy):
     next = __next__
 
     def close(self):
-        if getattr(self.__wrapped__, "close", None):
-            self.__wrapped__.close()
+        if getattr(self._iterable, "close", None):
+            self._iterable.close()
         self._finish_spans()
 
     def _finish_spans(self):
@@ -62,14 +61,6 @@ class _TracedIterable(wrapt.ObjectProxy):
             self._self_span.finish()
             self._self_parent_span.finish()
             self._self_span_finished = True
-
-    def __getattribute__(self, name):
-        if name == "__len__":
-            # __len__ is defined by the parent class, wrapt.ObjectProxy.
-            # However this attribute should not be defined for iterables.
-            # By definition, iterables should not support len(...).
-            raise AttributeError("__len__ is not supported")
-        return super(_TracedIterable, self).__getattribute__(name)
 
 
 def _on_context_started(ctx):
